@@ -112,34 +112,14 @@ int main() {
     while (pending_packets.count > 0 || ready_queue.count > 0) {
         // Find next event time
         double next_arrival = (pending_packets.count > 0) ? pending_packets.packets[0].arrival_time : DBL_MAX;
-        double next_finish = (ready_queue.count > 0) ? real_time : DBL_MAX;
         
-        if (ready_queue.count > 0) {
-            // Find the packet with earliest virtual finish time that's ready
-            int best_idx = -1;
-            double best_virtual_finish = DBL_MAX;
-            
-            for (int i = 0; i < ready_queue.count; i++) {
-                if (ready_queue.packets[i].virtual_finish_time < best_virtual_finish ||
-                    (ready_queue.packets[i].virtual_finish_time == best_virtual_finish && 
-                     (best_idx == -1 || ready_queue.packets[i].appearance_order < ready_queue.packets[best_idx].appearance_order))) {
-                    best_virtual_finish = ready_queue.packets[i].virtual_finish_time;
-                    best_idx = i;
-                }
-            }
-            
-            if (best_idx >= 0) {
-                next_finish = real_time;
-            }
-        }
-        
-        // Choose next event
-        if (next_arrival <= next_finish) {
-            // Process arriving packet
-            process_packets_up_to_time(next_arrival);
-        } else if (ready_queue.count > 0) {
+        // If we have packets ready to transmit and server is idle (real_time is current time)
+        if (ready_queue.count > 0 && next_arrival >= real_time) {
             // Schedule next packet transmission
             schedule_next_packet();
+        } else if (pending_packets.count > 0) {
+            // Process arriving packets
+            process_packets_up_to_time(next_arrival);
         } else {
             break;
         }
@@ -299,6 +279,26 @@ void process_packets_up_to_time(double current_time) {
 void schedule_next_packet() {
     if (ready_queue.count == 0) return;
     
+    // Calculate weight sum of current active connections (BEFORE removing packet)
+    double weight_sum = 0.0;
+    int active_connections[MAX_CONNECTIONS];
+    int num_active = 0;
+    
+    for (int i = 0; i < ready_queue.count; i++) {
+        int conn_id = ready_queue.packets[i].connection_id;
+        int found = 0;
+        for (int j = 0; j < num_active; j++) {
+            if (active_connections[j] == conn_id) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            active_connections[num_active++] = conn_id;
+            weight_sum += connections[conn_id].weight;
+        }
+    }
+    
     // Find packet with smallest virtual finish time (with tie-breaking)
     int best_idx = 0;
     for (int i = 1; i < ready_queue.count; i++) {
@@ -312,37 +312,15 @@ void schedule_next_packet() {
     Packet packet = ready_queue.packets[best_idx];
     remove_packet_from_queue(&ready_queue, best_idx);
     
-    // Output the scheduled packet
-    printf("%.6f: %s\n", real_time, packet.original_line);
+    // Output the scheduled packet with transmission start time
+    printf("%d: %s\n", (int)real_time, packet.original_line);
     
-    // Advance real time by transmission time
+    // Advance real time by transmission time (server becomes busy)
     real_time += packet.length;
     
-    // Update virtual time
-    if (ready_queue.count > 0) {
-        // Calculate weight sum of remaining active connections
-        double weight_sum = 0.0;
-        int active_connections[MAX_CONNECTIONS];
-        int num_active = 0;
-        
-        for (int i = 0; i < ready_queue.count; i++) {
-            int conn_id = ready_queue.packets[i].connection_id;
-            int found = 0;
-            for (int j = 0; j < num_active; j++) {
-                if (active_connections[j] == conn_id) {
-                    found = 1;
-                    break;
-                }
-            }
-            if (!found) {
-                active_connections[num_active++] = conn_id;
-                weight_sum += connections[conn_id].weight;
-            }
-        }
-        
-        if (weight_sum > 0) {
-            virtual_time += packet.length / weight_sum;
-        }
+    // Update virtual time based on GPS model
+    if (weight_sum > 0) {
+        virtual_time += packet.length / weight_sum;
     } else {
         virtual_time = real_time;
     }
