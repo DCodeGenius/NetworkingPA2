@@ -55,6 +55,8 @@ double virtual_time = 0.0;
 long long real_time = 0; // Represents when the server becomes free next
 PacketQueue pending_packets = {NULL, 0, 0};
 PacketQueue ready_queue = {NULL, 0, 0};
+long long last_virtual_change = 0;
+long long current_time = 0;
 
 // Function prototypes
 int find_or_create_connection(const char* src_ip, int src_port, const char* dst_ip, int dst_port, int appearance_order);
@@ -107,7 +109,6 @@ int compare_packets_by_arrival_time(const void* a, const void* b) {
 int main() {
     char line[MAX_LINE_LEN];
     int appearance_order = 0;
-    long long last_virtual_change = 0;
     init_packet_queue(&pending_packets);
     init_packet_queue(&ready_queue);
 
@@ -121,7 +122,6 @@ int main() {
 
     qsort(pending_packets.packets, pending_packets.count, sizeof(Packet), compare_packets_by_arrival_time);
 
-    long long current_time = 0;
 
     while (pending_packets.count > 0 || ready_queue.count > 0) {
         long long next_arrival_event_time = (pending_packets.count > 0) ? pending_packets.packets[0].arrival_time : LLONG_MAX;
@@ -182,7 +182,6 @@ int main() {
 
         if (ready_queue.count > 0 && real_time <= current_time) {
             schedule_next_packet(current_time);
-            last_virtual_change = current_time;
         }
         else {
             if (ready_queue.count == 0 && virtual_time < current_time) {
@@ -340,10 +339,11 @@ void schedule_next_packet(int current_time) {
 
     if (current_weight_sum > 0) {
 
-        printf("virtual time before %lf \n", virtual_time);
+        // printf("virtual time before %lf \n", virtual_time);
         virtual_time += (double)packet_to_send.length / current_weight_sum;
+        last_virtual_change = current_time;
          // virtual_time += (double)(current_time - real_time) / current_weight_sum;
-        printf("virtual time after %lf \n", virtual_time);
+        // printf("virtual time after %lf \n", virtual_time);
      }
     // Update server's next free time
     real_time = actual_start_time + packet_to_send.length;
