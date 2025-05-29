@@ -32,6 +32,7 @@ typedef struct {
     double virtual_finish_time;
     int connection_id;
     int appearance_order;
+    char is_on_bus;
 } Packet;
 
 typedef struct {
@@ -57,6 +58,8 @@ PacketQueue pending_packets = {NULL, 0, 0};
 PacketQueue ready_queue = {NULL, 0, 0};
 long long last_virtual_change = 0;
 long long current_time = 0;
+char is_packet_on_bus = 0;
+char packet_on_bus_idx = 0;
 
 // Function prototypes
 int find_or_create_connection(const char* src_ip, int src_port, const char* dst_ip, int dst_port, int appearance_order);
@@ -133,6 +136,10 @@ int main() {
             current_time = next_arrival_event_time;
         } else {
             current_time = (next_arrival_event_time < real_time) ? next_arrival_event_time : real_time;
+        }
+        if (current_time >= real_time && is_packet_on_bus) {
+            remove_packet_from_queue(&ready_queue, packet_on_bus_idx);
+            is_packet_on_bus = 0;
         }
 
 
@@ -242,6 +249,7 @@ void parse_packet(const char* line, Packet* packet, int appearance_order) {
     strcpy(packet->original_line, line);
     packet->appearance_order = appearance_order;
     packet->has_weight = 0;
+    packet -> is_on_bus = 0;
 
     char* line_copy = my_strdup(line);
     char* token = strtok(line_copy, " ");
@@ -299,21 +307,25 @@ void schedule_next_packet(int current_time) {
 
     const double EPS = 1e-9;   // tolerance for almost-equal VFTs
 
-    int best_idx = 0;
-    for (int i = 1; i < ready_queue.count; i++) {
-        double diff = ready_queue.packets[i].virtual_finish_time -
-                      ready_queue.packets[best_idx].virtual_finish_time;
+    int best_idx = -1;
+    for (int i = 0; i < ready_queue.count; i++) {
+        if(ready_queue.packets[i].is_on_bus == 0) {
+            double diff = ready_queue.packets[i].virtual_finish_time -
+                          ready_queue.packets[best_idx].virtual_finish_time;
 
-        if (diff < -EPS ||                            /* clearly smaller VFT          */
-            (fabs(diff) <= EPS &&                   /* virtually equal → tie-break  */
-             connections[ready_queue.packets[i].connection_id].appearance_order <
-             connections[ready_queue.packets[best_idx].connection_id].appearance_order)) {
-            best_idx = i;
+            if (diff < -EPS ||                            /* clearly smaller VFT          */
+                (fabs(diff) <= EPS &&                   /* virtually equal → tie-break  */
+                 connections[ready_queue.packets[i].connection_id].appearance_order <
+                 connections[ready_queue.packets[best_idx].connection_id].appearance_order)) {
+                best_idx = i;
+            }
         }
     }
-
+    ready_queue.packets[best_idx].is_on_bus = 1;
     Packet packet_to_send = ready_queue.packets[best_idx];
-    remove_packet_from_queue(&ready_queue, best_idx);
+    //remove_packet_from_queue(&ready_queue, best_idx);
+    is_packet_on_bus = 1;
+    packet_on_bus_idx = best_idx;
 
     // Determine actual start time for this packet
     // real_time currently holds when the server *became free* from the *previous* transmission (or 0 if idle)
@@ -331,7 +343,7 @@ void schedule_next_packet(int current_time) {
     int num_active_ids = 0;
 
     // Consider the packet_to_send as part of the active set for weight sum calculation
-    current_weight_sum += connections[packet_to_send.connection_id].weight;
+    //current_weight_sum += connections[packet_to_send.connection_id].weight; //TODO check uf ok to remove
     active_conn_ids[num_active_ids++] = packet_to_send.connection_id;
 
     // Add weights of other unique connections remaining in the ready_queue
