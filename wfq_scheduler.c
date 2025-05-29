@@ -174,9 +174,9 @@ int main() {
 
             double virtual_start = (virtual_time > last_conn_vft) ? virtual_time : last_conn_vft;
 
-            if (packet.arrival_time == 312232  || packet.arrival_time ==  312077) {
-                printf("DEBUG: %s virtual start: %f lastconfft %f virtual time %f \n", packet.original_line, virtual_start, last_conn_vft, virtual_time);
-            }
+            // if (packet.arrival_time == 312232  || packet.arrival_time ==  312077) {
+            //     // printf("DEBUG: %s virtual start: %f lastconfft %f virtual time %f \n", packet.original_line, virtual_start, last_conn_vft, virtual_time);
+            // }
 
             // printf("DEBUG: last_conn_vft %lf, virtual_time %lf, chose %lf \n", last_conn_vft, virtual_time, virtual_start);
 
@@ -187,7 +187,7 @@ int main() {
             add_packet_to_queue(&ready_queue, &packet);
         }
 
-        if (ready_queue.count > 0 && real_time <= current_time) {
+        if (ready_queue.count > 0 && real_time <= current_time && is_packet_on_bus == 0) {
             schedule_next_packet(current_time);
         }
         else {
@@ -307,8 +307,8 @@ void schedule_next_packet(int current_time) {
 
     const double EPS = 1e-9;   // tolerance for almost-equal VFTs
 
-    int best_idx = -1;
-    for (int i = 0; i < ready_queue.count; i++) {
+    int best_idx = 0;
+    for (int i = 1; i < ready_queue.count; i++) {
         if(ready_queue.packets[i].is_on_bus == 0) {
             double diff = ready_queue.packets[i].virtual_finish_time -
                           ready_queue.packets[best_idx].virtual_finish_time;
@@ -318,21 +318,21 @@ void schedule_next_packet(int current_time) {
                  connections[ready_queue.packets[i].connection_id].appearance_order <
                  connections[ready_queue.packets[best_idx].connection_id].appearance_order)) {
                 best_idx = i;
-            }
+                 }
         }
     }
-    ready_queue.packets[best_idx].is_on_bus = 1;
-    Packet packet_to_send = ready_queue.packets[best_idx];
+        ready_queue.packets[best_idx].is_on_bus = 1;
+        Packet packet_to_send = ready_queue.packets[best_idx];
     //remove_packet_from_queue(&ready_queue, best_idx);
-    is_packet_on_bus = 1;
-    packet_on_bus_idx = best_idx;
+        is_packet_on_bus = 1;
+        packet_on_bus_idx = best_idx;
 
     // Determine actual start time for this packet
     // real_time currently holds when the server *became free* from the *previous* transmission (or 0 if idle)
     long long actual_start_time = (real_time > packet_to_send.arrival_time) ? real_time : packet_to_send.arrival_time;
 
     // Original output format restored
-    printf("%lld: %s virtual start: %f virtual end: %f \n", actual_start_time, packet_to_send.original_line, packet_to_send.virtual_start_time, packet_to_send.virtual_finish_time);
+    printf("%lld: %s\n", actual_start_time, packet_to_send.original_line);
 
 
 
