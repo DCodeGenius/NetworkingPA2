@@ -181,7 +181,7 @@ int main() {
             // printf("DEBUG: last_conn_vft %lf, virtual_time %lf, chose %lf \n", last_conn_vft, virtual_time, virtual_start);
 
             packet.virtual_start_time = virtual_start;
-            packet.virtual_finish_time = virtual_start + (double)packet.length / connections[conn_id].weight;
+            packet.virtual_finish_time = virtual_start + (double)packet.length / packet.weight;
 
             connections[conn_id].virtual_finish_time = packet.virtual_finish_time;
             add_packet_to_queue(&ready_queue, &packet);
@@ -344,7 +344,7 @@ void schedule_next_packet(int current_time) {
 
     // Consider the packet_to_send as part of the active set for weight sum calculation
     //current_weight_sum += connections[packet_to_send.connection_id].weight; //TODO check uf ok to remove
-    active_conn_ids[num_active_ids++] = packet_to_send.connection_id;
+    // active_conn_ids[num_active_ids++] = packet_to_send.connection_id;
 
     // Add weights of other unique connections remaining in the ready_queue
     current_weight_sum = sum_Active_weights(num_active_ids, active_conn_ids, current_weight_sum);
