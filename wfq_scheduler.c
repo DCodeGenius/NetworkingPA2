@@ -106,7 +106,7 @@ double sum_Active_weights() {
             }
         }
         if(!found) {
-                current_weight_sum += virtual_bus.packets[i].weight; //TODO check this change
+                current_weight_sum += virtual_bus.packets[i].weight;
                 active_conn_ids[num_active_ids++] = conn_id;
         }
     }
@@ -164,9 +164,6 @@ int main() {
         if (next_departure_time < current_time && is_packet_on_bus){ //&& is_packet_on_bus) {
             current_time = next_departure_time;
         }
-            // if (is_packet_on_bus == 1) {
-            //    // current_time = next_arrival_event_time; // < real_time) ? next_arrival_event_time : real_time;
-            // }
             if (virtual_bus.count != 0) {
                 double virtual_finish = virtual_bus.packets[0].virtual_finish_time;
                 if ((current_time <= debug_arrival_time_1 && current_time >= debug_arrival_time_2) && Debug == 1) {
@@ -184,18 +181,7 @@ int main() {
 
         if (current_time == DBL_MAX) break;
 
-        // **Potential Refinement for Idle Period Virtual Time Update**
-        // If the system was idle (ready_queue empty before this current_time step)
-        // and current_time (driven by an arrival) is ahead of virtual_time,
-        // then do not touch virtual time.
-        // This should happen BEFORE processing arrivals for this current_time.
-        // if (ready_queue.count == 0 && virtual_bus.count == 0){ // is_packet_on_bus == 0) { //TODO check this!! //do nothing if server was idle
-        //     // System was idle
-        //     // virtual_time += current_time - last_virtual_change;
-        //     // last_virtual_change = current_time;
-        //     last_virtual_change = current_time; //indicate we checked here if virtual time should change
-        // }
-        // else {
+
             if ((current_time <= debug_arrival_time_1 && current_time >= debug_arrival_time_2) && Debug == 1) {
                 printf("reason for call: summation to compute virtual time\n\n");
             }
@@ -216,12 +202,15 @@ int main() {
         }
 
         if (current_time >= next_departure_time && is_packet_on_bus ==  1) {
-            // remove_packet_from_queue(&ready_queue, packet_on_bus_idx);
             is_packet_on_bus = 0;
         }
         // Process all packets that have arrived by this current_time
         if (pending_packets.count > 0 && pending_packets.packets[0].arrival_time <= current_time) {
             Packet packet = pending_packets.packets[0];
+            // Find or create connection
+            packet.connection_id = find_or_create_connection(packet.src_ip, packet.src_port,
+                                                             packet.dst_ip, packet.dst_port,
+                                                             appearance_order);
             remove_packet_from_queue(&pending_packets, 0);
 
             int conn_id = packet.connection_id;
@@ -234,7 +223,6 @@ int main() {
                 printf("DEBUG: %s virtual start: %f lastconfft %f virtual time %f \n", packet.original_line, virtual_start, last_conn_vft, virtual_time);
              }
 
-            // printf("DEBUG: last_conn_vft %lf, virtual_time %lf, chose %lf \n", last_conn_vft, virtual_time, virtual_start);
 
             packet.virtual_start_time = virtual_start;
             if (packet.has_weight) {
@@ -330,17 +318,8 @@ void parse_packet(const char* line, Packet* packet, int appearance_order) {
 
     free(line_copy);
 
-    // Find or create connection TODO I think this should be done On-line, not sure how important it is
-    packet->connection_id = find_or_create_connection(packet->src_ip, packet->src_port,
-                                                     packet->dst_ip, packet->dst_port,
-                                                     appearance_order);
 
-    // Update connection weight if specified
-    // if (packet->has_weight) { //TODO moved weights to be computed dynamically, check is good
-    //     connections[packet->connection_id].weight = packet->weight;
-    // } else {
-    //     packet->weight = connections[packet->connection_id].weight;
-    // }
+
 }
 
 void add_packet_to_queue(PacketQueue* queue, const Packet* packet) {
@@ -402,23 +381,6 @@ void schedule_next_packet() {
     // Calculate weight sum of connections that were in ready_queue *before* this packet was removed
     double current_weight_sum = 0;
 
-
-    // Consider the packet_to_send as part of the active set for weight sum calculation
-    //current_weight_sum += connections[packet_to_send.connection_id].weight; //TODO check uf ok to remove
-    // active_conn_ids[num_active_ids++] = packet_to_send.connection_id;
-
-    // Add weights of other unique connections remaining in the ready_queue
-    // Add weights of other unique connections remaining in the ready_queue
-    // current_weight_sum = sum_Active_weights();
-
-    // if (current_weight_sum > 0) {
-    //
-    //     // printf("virtual time before %lf \n", virtual_time);
-    //     // virtual_time += (double)packet_to_send.length / current_weight_sum; //TODO check if removal correct
-    //     // last_virtual_change = current_time;
-    //      // virtual_time += (double)(current_time - real_time) / current_weight_sum;
-    //     // printf("virtual time after %lf \n", virtual_time);
-    //  }
     // Update server's next free time
     next_departure_time = actual_start_time + packet_to_send.length;
 }
@@ -428,5 +390,4 @@ void cleanup() {
     if (pending_packets.packets) free(pending_packets.packets);
     if (ready_queue.packets) free(ready_queue.packets);
     if (virtual_bus.packets) free(virtual_bus.packets);
-    // if (to_leave_virtual_bus.packets) free(to_leave_virtual_bus.packets);
 }
