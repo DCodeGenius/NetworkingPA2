@@ -19,7 +19,7 @@
 #define MAX_LINE_LEN 256
 #define MAX_CONNECTIONS 10000
 #define INITIAL_PACKET_CAPACITY 100000
-
+#define EPSILON 1e-9
 
 typedef struct {
     char src_ip[MAX_IP_LEN];
@@ -55,28 +55,21 @@ typedef struct {
     int active;
 } ConnectionInfo;
 
-typedef struct {
-    Packet *packets;
-    int count;
-    int capacity;
-} PacketQueue;
 
 struct CompareByVFT {
     bool operator()(const Packet& a, const Packet& b) const {
-        const double EPS = 1e-9;
         double diff = a.virtual_finish_time - b.virtual_finish_time;
 
-        if (fabs(diff) > EPS) return a.virtual_finish_time > b.virtual_finish_time;
+        if (fabs(diff) > EPSILON) return a.virtual_finish_time > b.virtual_finish_time;
         return a.appearance_order > b.appearance_order;
     }
 };
 
 struct CompareByVST {
     bool operator()(const Packet& a, const Packet& b) const {
-        const double EPS = 1e-9;
         double diff = a.virtual_start_time - b.virtual_start_time;
 
-        if (fabs(diff) > EPS) return a.virtual_start_time > b.virtual_start_time;
+        if (fabs(diff) > EPSILON) return a.virtual_start_time > b.virtual_start_time;
         return a.appearance_order > b.appearance_order;
     }
 };
@@ -86,14 +79,10 @@ ConnectionInfo connections[MAX_CONNECTIONS];
 int num_connections = 0;
 double virtual_time = 0.0;
 double next_departure_time = 0; // Represents when the server becomes free next
-// PacketQueue pending_packets = {NULL, 0, 0};
 std::queue<Packet> pending_packets;
-// PacketQueue_queue = {NULL, 0, 0};
 std::priority_queue<Packet, std::vector<Packet>, CompareByVFT> ready_queue;
- // PacketQueue virtual_bus = {NULL, 0, 0};
 std::priority_queue<Packet, std::vector<Packet>, CompareByVFT> virtual_bus;
 std::priority_queue<Packet, std::vector<Packet>, CompareByVST> wait_for_virtual_bus;
-// PacketQueue to_leave_virtual_bus = {NULL, 0, 0};
 double last_virtual_change = 0.0;
 double current_time = 0.0;
 char is_packet_on_bus = 0;
@@ -109,52 +98,16 @@ int debug_func_use = 0;
 // Function prototypes
 int find_or_create_connection(const char* src_ip, int src_port, const char* dst_ip, int dst_port, int appearance_order);
 void parse_packet(const char* line, Packet* packet, int appearance_order);
-void add_packet_to_queue(PacketQueue* queue, const Packet* packet);
-void remove_packet_from_queue(PacketQueue* queue, int index);
-int compare_packets_by_arrival_time(const void* a, const void* b);
 void schedule_next_packet();
-void init_packet_queue(PacketQueue* queue);
-void cleanup();
 char* my_strdup(const char* s);
-// double sum_Active_weights();
-int find_packet_by_appearance(PacketQueue *queue, int appearance_order);
-
-// Helper function to duplicate string (portable strdup)
-int find_packet_by_appearance(PacketQueue *queue, int appearance_order) {
-    for (int i = 0; i < queue->count; i++) {
-        if (queue->packets[i].appearance_order == appearance_order) {
-            return i;
-        }
-    }
-    return -1;
-}
+void parse_file();
+void add_to_virtual_bus(Packet* packet);
+void handle_packet_arrival(Packet* packet);
+void remove_from_virtual_bus();
 
 
 
-// double sum_Active_weights() {
-//     int num_active_ids = 0;
-//     int active_conn_ids[MAX_CONNECTIONS] = {0};
-//     double current_weight_sum = 0;
-//     for (int i = 0 ; i < virtual_bus.count; i++) {
-//         int conn_id = virtual_bus.packets[i].connection_id;
-//         int found = 0;
-//         for(int k=0; k < num_active_ids; ++k) {
-//             if(active_conn_ids[k] == conn_id) {
-//                 found = 1;
-//                 break;
-//             }
-//         }
-//         if(!found) {
-//                 current_weight_sum += virtual_bus.packets[i].weight;
-//                 active_conn_ids[num_active_ids++] = conn_id;
-//         }
-//         if (found) {
-//             printf("unwanted behaviour\n");
-//             printf("second packet here is %s, VS %lf, current virt %lf \n", virtual_bus.packets[i].original_line, virtual_bus.packets[i].virtual_start_time, virtual_time);
-//         }
-//     }
-//     return current_weight_sum;
-// }
+
 char* my_strdup(const char* s) {
     size_t len = strlen(s) + 1;
     char* copy = (char*)malloc(len);
@@ -162,15 +115,6 @@ char* my_strdup(const char* s) {
         memcpy(copy, s, len);
     }
     return copy;
-}
-
-// Comparison function for qsort
-int compare_packets_by_arrival_time(const void* a, const void* b) {
-    const Packet* pa = (const Packet*)a;
-    const Packet* pb = (const Packet*)b;
-    if (pa->arrival_time < pb->arrival_time) return -1;
-    if (pa->arrival_time > pb->arrival_time) return 1;
-    return pa->appearance_order - pb->appearance_order;
 }
 
 int compare_packets_by_virtual_finish_time(const void* a, const void* b) {
@@ -181,14 +125,9 @@ int compare_packets_by_virtual_finish_time(const void* a, const void* b) {
     return pa->appearance_order - pb->appearance_order;
 }
 
-int main() {
-    // printf("am debugging this");
+void parse_file() {
     char line[MAX_LINE_LEN];
     int appearance_order = 0;
-    // init_packet_queue(&pending_packets);
-    // init_packet_queue(&ready_queue);
-     // init_packet_queue(&virtual_bus);
-    // init_packet_queue(&to_leave_virtual_bus);
     while (fgets(line, sizeof(line), stdin)) {
         line[strcspn(line, "\n")] = 0;
         if (strlen(line) == 0) continue;
@@ -196,134 +135,143 @@ int main() {
         parse_packet(line, &packet, appearance_order++);
         pending_packets.push(packet);
     }
+}
 
-    // qsort(pending_packets.packets, pending_packets.count, sizeof(Packet), compare_packets_by_arrival_time);
+void progress_real_time(long long next_arrival_event_time) {
 
+    current_time = next_arrival_event_time;
+    if (next_departure_time < current_time && is_packet_on_bus){ //&& is_packet_on_bus) {
+        current_time = next_departure_time;
+    }
+    if (!virtual_bus.empty() > 0) {
+        // qsort(virtual_bus.packets, virtual_bus.count, sizeof(Packet), compare_packets_by_virtual_finish_time);
+        double virtual_finish = virtual_bus.top().virtual_finish_time;
+        if ((current_time <= debug_arrival_time_1 && current_time >= debug_arrival_time_2) && Debug == 1) {
+            printf("reason for call: compute if next event is virtual departure \n\n");
+        }
+        double real_finish_virtual = last_virtual_change + (virtual_finish - virtual_time) *(sum_active_weight); //sum_Active_weights(); // sum_active_weight;
+        if (Debug == 1 && current_time == 1112533.0) {
+            printf("real_finish_virtual = %lf \n", real_finish_virtual);
+        }
+        if (real_finish_virtual <= current_time + EPSILON) {
+            current_time = real_finish_virtual;
+            should_remove_from_virtual_bus = 1; // will remove later, need to take into account when computing virtual
+        }
+    }
+}
+
+void progress_virtual_time(long long next_arrival_event_time) {
+    double weight_sum =  sum_active_weight; //sum_Active_weights(); //sum_active_weight;
+
+    if (weight_sum >EPSILON) {
+        if ((current_time <= debug_arrival_time_1 && current_time >= debug_arrival_time_2) && Debug == 1) {
+            printf("virtual_time: %f, new virtual time %f, current_time %lf\n", virtual_time, virtual_time + (double)(current_time - last_virtual_change) / weight_sum, current_time);
+            printf("weight sum %f, time diff %lf \n", weight_sum, current_time - last_virtual_change);
+            printf("next arrival %lld current time %lf, next dep %lf\n", next_arrival_event_time, current_time, next_departure_time);
+        }
+        virtual_time += (double)(current_time - last_virtual_change) / weight_sum;
+
+    }
+    last_virtual_change = current_time;
+}
+
+void remove_from_virtual_bus() {
+    if ((virtual_bus.top().arrival_time <= debug_arrival_time_1  && virtual_bus.top().arrival_time >=  debug_arrival_time_2) && Debug == 1) {
+        printf("removing packet %s virtual time %lf\n", virtual_bus.top().original_line, virtual_time);
+    }
+    sum_active_weight -= virtual_bus.top().weight;
+    virtual_bus.pop();
+}
+
+void add_to_virtual_bus(Packet* packet_to_add) {
+    sum_active_weight += packet_to_add->weight;
+    virtual_bus.push(*packet_to_add);
+}
+
+void handle_packet_arrival(Packet* packet) {
+    pending_packets.pop();
+
+    int conn_id = packet->connection_id;
+    double last_conn_vft = connections[conn_id].virtual_finish_time;
+
+    double virtual_start = (virtual_time > last_conn_vft) ? virtual_time : last_conn_vft;
+
+
+    if ((packet->arrival_time <= debug_arrival_time_1  && packet->arrival_time >=  debug_arrival_time_2) && Debug == 1) {
+        printf("DEBUG: %s virtual start: %f lastconfft %f virtual time %f \n", packet->original_line, virtual_start, last_conn_vft, virtual_time);
+    }
+
+
+    packet->virtual_start_time = virtual_start;
+    if (packet->has_weight) {
+        connections[conn_id].weight = packet->weight;
+    }else{packet->weight = connections[conn_id].weight;} //if packet does not have a specified weight, take the connection's at the time
+    packet->virtual_finish_time = virtual_start + (double)packet->length / connections[conn_id].weight;
+
+    if ((packet->arrival_time <= debug_arrival_time_1  && packet->arrival_time >=  debug_arrival_time_2) && Debug == 1) {
+        printf("DEBUG: %s Virtual End %f length %d weight %lf \n", packet->original_line, packet->virtual_finish_time, packet->length, connections[packet->connection_id].weight);
+    }
+    connections[conn_id].virtual_finish_time = packet->virtual_finish_time;
+
+    ready_queue.push(*packet);
+}
+int main() {
+    parse_file();
     while (!pending_packets.empty() || !ready_queue.empty()) {
-
+        if (Debug == 1) {
+            printf("ready_queue.size() = %lld \n", ready_queue.size());
+        }
         long long next_arrival_event_time = (!pending_packets.empty()) ? pending_packets.front().arrival_time : LLONG_MAX;
-
         if (ready_queue.empty() && next_arrival_event_time == LLONG_MAX) {
             break;
         }
-        current_time = next_arrival_event_time;
-        if (next_departure_time < current_time && is_packet_on_bus){ //&& is_packet_on_bus) {
-            current_time = next_departure_time;
-        }
-        if (!virtual_bus.empty() > 0) {
-             // qsort(virtual_bus.packets, virtual_bus.count, sizeof(Packet), compare_packets_by_virtual_finish_time);
-            double virtual_finish = virtual_bus.top().virtual_finish_time;
-            if ((current_time <= debug_arrival_time_1 && current_time >= debug_arrival_time_2) && Debug == 1) {
-                printf("reason for call: compute if next event is virtual departure \n\n");
-            }
-            double real_finish_virtual = last_virtual_change + (virtual_finish - virtual_time) *(sum_active_weight); //sum_Active_weights(); // sum_active_weight;
-            if (Debug == 1 && current_time == 1112533.0) {
-                printf("real_finish_virtual = %lf \n", real_finish_virtual);
-            }
-            if (real_finish_virtual <= current_time + 1e-9) {
-                current_time = real_finish_virtual;
-                should_remove_from_virtual_bus = 1; // will remove later, need to take into account when computing virtual
-            }
+
+        // Virtual and Real time progression
+        progress_real_time(next_arrival_event_time);
+        progress_virtual_time(next_arrival_event_time);
+
+        if (current_time == DBL_MAX) {
+            break;
         }
 
 
+    // }
 
+    if (should_remove_from_virtual_bus) {
+        remove_from_virtual_bus();
+        should_remove_from_virtual_bus = 0;
+    }
 
-        if (current_time == DBL_MAX) break;
+     //move packet from wait for virtual to virtual if needed
+    if (!wait_for_virtual_bus.empty() && wait_for_virtual_bus.top().virtual_start_time <= virtual_time + EPSILON) {
+        Packet packet_to_move = wait_for_virtual_bus.top();
+        add_to_virtual_bus(&packet_to_move);
+        wait_for_virtual_bus.pop();
+    }
 
+    if (current_time >= next_departure_time && is_packet_on_bus ==  1) {
+        is_packet_on_bus = 0;
+    }
+    // Process all packets that have arrived by this current_time
+    while (!pending_packets.empty() && pending_packets.front().arrival_time <= current_time) {
+        Packet packet = pending_packets.front();
+        // Find or create connection
+        packet.connection_id = find_or_create_connection(packet.src_ip, packet.src_port,
+                                                         packet.dst_ip, packet.dst_port,
+                                                         packet.appearance_order);
+        handle_packet_arrival(&packet);
 
-            if ((current_time <= debug_arrival_time_1 && current_time >= debug_arrival_time_2) && Debug == 1) {
-                printf("reason for call: summation to compute virtual time\n\n");
-            }
-            double weight_sum =  sum_active_weight; //sum_Active_weights(); //sum_active_weight;
-
-            if (weight_sum >1e-9) {
-                if ((current_time <= debug_arrival_time_1 && current_time >= debug_arrival_time_2) && Debug == 1) {
-                    printf("virtual_time: %f, new virtual time %f, current_time %lf\n", virtual_time, virtual_time + (double)(current_time - last_virtual_change) / weight_sum, current_time);
-                    printf("weight sum %f, time diff %lf \n", weight_sum, current_time - last_virtual_change);
-                    printf("next arrival %lld current time %lf, next dep %lf\n", next_arrival_event_time, current_time, next_departure_time);
-                }
-                virtual_time += (double)(current_time - last_virtual_change) / weight_sum;
-
-            }
-            last_virtual_change = current_time;
-        // }
-
-        if (should_remove_from_virtual_bus) {
-            should_remove_from_virtual_bus = 0;
-            // qsort(virtual_bus.packets, virtual_bus.count, sizeof(Packet), compare_packets_by_virtual_finish_time);
-            if ((virtual_bus.top().arrival_time <= debug_arrival_time_1  && virtual_bus.top().arrival_time >=  debug_arrival_time_2) && Debug == 1) {
-                printf("removing packet %s virtual time %lf\n", virtual_bus.top().original_line, virtual_time);
-            }
-            sum_active_weight -= virtual_bus.top().weight;
-            //remove_packet_from_queue(&virtual_bus, 0);
-            virtual_bus.pop();
+        if (packet.virtual_start_time != virtual_time) {
+            wait_for_virtual_bus.push(packet);
+        }else {
+            add_to_virtual_bus(&packet);
         }
-        if (!wait_for_virtual_bus.empty() && wait_for_virtual_bus.top().virtual_start_time <= virtual_time + 1e-9) {
-            if (Debug) {
-                printf("i am here with packet %s virtual start %lf virtual time %lf current time %lf \n", wait_for_virtual_bus.top().original_line, wait_for_virtual_bus.top().virtual_start_time, virtual_time,current_time);
-            }
-            Packet packet_to_move = wait_for_virtual_bus.top();
-            sum_active_weight += packet_to_move.weight;
-            wait_for_virtual_bus.pop();
-           // virtual_bus.push(packet_to_move);
-            virtual_bus.push(packet_to_move);
-           // add_packet_to_queue(&virtual_bus, &packet_to_move);
+    }
 
-             // qsort(virtual_bus.packets, virtual_bus.count, sizeof(Packet), compare_packets_by_virtual_finish_time);
-        }
-
-        if (current_time >= next_departure_time && is_packet_on_bus ==  1) {
-            is_packet_on_bus = 0;
-        }
-        // Process all packets that have arrived by this current_time
-        if (!pending_packets.empty() && pending_packets.front().arrival_time <= current_time) {
-            Packet packet = pending_packets.front();
-            // Find or create connection
-            packet.connection_id = find_or_create_connection(packet.src_ip, packet.src_port,
-                                                             packet.dst_ip, packet.dst_port,
-                                                             appearance_order);
-            pending_packets.pop();
-
-            int conn_id = packet.connection_id;
-            double last_conn_vft = connections[conn_id].virtual_finish_time;
-
-            double virtual_start = (virtual_time > last_conn_vft) ? virtual_time : last_conn_vft;
-
-
-             if ((packet.arrival_time <= debug_arrival_time_1  && packet.arrival_time >=  debug_arrival_time_2) && Debug == 1) {
-                printf("DEBUG: %s virtual start: %f lastconfft %f virtual time %f \n", packet.original_line, virtual_start, last_conn_vft, virtual_time);
-             }
-
-
-            packet.virtual_start_time = virtual_start;
-            if (packet.has_weight) {
-                connections[conn_id].weight = packet.weight;
-            }else{packet.weight = connections[conn_id].weight;} //if packet does not have a specified weight, take the connection's at the time
-            packet.virtual_finish_time = virtual_start + (double)packet.length / connections[conn_id].weight;
-
-            if ((packet.arrival_time <= debug_arrival_time_1  && packet.arrival_time >=  debug_arrival_time_2) && Debug == 1) {
-                printf("DEBUG: %s Virtual End %f length %d weight %lf \n", packet.original_line, packet.virtual_finish_time, packet.length, connections[packet.connection_id].weight);
-            }
-            connections[conn_id].virtual_finish_time = packet.virtual_finish_time;
-
-            //add_packet_to_queue(&ready_queue, &packet);
-            ready_queue.push(packet);
-
-            if (virtual_start != virtual_time) {
-                wait_for_virtual_bus.push(packet);
-            }else {
-                sum_active_weight += packet.weight;
-                virtual_bus.push(packet);
-                // add_packet_to_queue(&virtual_bus, &packet);
-            }
-            // qsort(virtual_bus.packets, virtual_bus.count, sizeof(Packet), compare_packets_by_virtual_finish_time);
-        }
-
-
-        if (!ready_queue.empty() && next_departure_time <= current_time && is_packet_on_bus == 0){// && is_packet_on_bus == 0) { //was && real_time <= current_time
-            schedule_next_packet();
-        }
+    // schedule a packet if it is time to do so
+    if (!ready_queue.empty() && next_departure_time <= current_time && is_packet_on_bus == 0){
+        schedule_next_packet();
+    }
 
 
 
@@ -332,11 +280,6 @@ int main() {
     return 0;
 }
 
-void init_packet_queue(PacketQueue* queue) {
-    queue->capacity = INITIAL_PACKET_CAPACITY;
-    queue->packets = (Packet*)malloc(queue->capacity * sizeof(Packet));
-    queue->count = 0;
-}
 
 int find_or_create_connection(const char* src_ip, int src_port, const char* dst_ip, int dst_port, int appearance_order) {
     // Look for existing connection
@@ -401,41 +344,11 @@ void parse_packet(const char* line, Packet* packet, int appearance_order) {
 
 }
 
-void add_packet_to_queue(PacketQueue* queue, const Packet* packet) {
-    if (queue->count >= queue->capacity) {
-        queue->capacity *= 2;
-        queue->packets = (Packet*)realloc(queue->packets, queue->capacity * sizeof(Packet));
-    }
-    queue->packets[queue->count++] = *packet;
-}
 
-void remove_packet_from_queue(PacketQueue* queue, int index) {
-
-    for (int i = index; i < queue->count - 1; i++) {
-        queue->packets[i] = queue->packets[i + 1];
-    }
-    queue->count--;
-}
 
 void schedule_next_packet() {
     if (ready_queue.empty()) return;
 
-    // const double EPS = 1e-9;   // tolerance for almost-equal VFTs
-
-    // int best_idx = 0;
-    // for (int i = 1; i < ready_queue.count; i++) {
-    //     if(ready_queue.packets[i].is_on_bus == 0) {
-    //         double diff = ready_queue.packets[i].virtual_finish_time -
-    //                       ready_queue.packets[best_idx].virtual_finish_time;
-    //
-    //         if (diff < -EPS ||                            /* clearly smaller VFT          */
-    //             (fabs(diff) <= EPS &&                   /* virtually equal → tie-break  */
-    //              connections[ready_queue.packets[i].connection_id].appearance_order <
-    //              connections[ready_queue.packets[best_idx].connection_id].appearance_order)) {
-    //             best_idx = i;
-    //              }
-    //     }
-    // }
 
         Packet packet_to_send = ready_queue.top();
         packet_to_send.is_on_bus = 1;
